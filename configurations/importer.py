@@ -29,7 +29,6 @@ def install(check_options=False):
     global installed
     if not installed:
         orig_create_parser = base.BaseCommand.create_parser
-
         def create_parser(self, prog_name, subcommand):
             parser = orig_create_parser(self, prog_name, subcommand)
             if isinstance(parser, OptionParser):
@@ -50,6 +49,7 @@ def install(check_options=False):
         sys.meta_path.insert(0, importer)
         installed = True
 
+# Two classes below implement https://www.python.org/dev/peps/pep-0302/
 
 class ConfigurationImporter(object):
     modvar = SETTINGS_ENVIRONMENT_VARIABLE
@@ -128,22 +128,42 @@ class ConfigurationImporter(object):
     def find_module(self, fullname, path=None):
         if fullname is not None and fullname == self.module:
             module = fullname.rsplit('.', 1)[-1]
+            try:
+                none_zip_module = imp.find_module(module, path)
+            except ImportError:
+                none_zip_module = None
+
             return ConfigurationLoader(self.name,
-                                       imp.find_module(module, path))
+                                       none_zip_module,
+                                       fullname)
         return None
 
 
 class ConfigurationLoader(object):
 
-    def __init__(self, name, location):
+    def __init__(self, name, location, fullname):
         self.name = name
         self.location = location
+        self.fullname = fullname
 
     def load_module(self, fullname):
         if fullname in sys.modules:
             mod = sys.modules[fullname]  # pragma: no cover
         else:
-            mod = imp.load_module(fullname, *self.location)
+            if self.location:
+                mod = imp.load_module(fullname, *self.location)
+            else:
+                # The problem is PEX has wired up the importer properly
+                # by calling importlib, it will trigger the import hook
+                # so by removing the import hook from the list to ensure
+                # it won't have dead-loop, granted it is such a hack now.
+                print ("******* load_module - Skip Loop *****")
+                import importlib
+                importer = sys.meta_path[0]
+                del sys.meta_path[0]
+                mod = importlib.import_module(fullname)
+                sys.meta_path.insert(0, importer)
+
         cls_path = '{0}.{1}'.format(mod.__name__, self.name)
 
         try:
